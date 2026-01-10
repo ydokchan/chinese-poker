@@ -1,0 +1,22 @@
+name: chinese_poker
+description: "A new Flutter project."
+publish_to: 'none'
+version: 0.1.0
+
+environment:
+  sdk: ^3.9.0
+
+dependencies:
+  flutter:
+    sdk: flutter
+  supabase_flutter: ^1.10.25
+  shared_preferences: ^2.2.3
+  supabase: ^1.11.11
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+
+flutter:
+  uses-material-design: true
