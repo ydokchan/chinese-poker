@@ -1,3 +1,3 @@
 # chinese_poker
 
-A new Flutter project.
+Chinese Poker for me and my friends
