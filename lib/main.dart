@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:async';
+import 'package:reorderables/reorderables.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -920,9 +921,7 @@ class _LobbyScreenState extends State<LobbyScreen> {
         .single();
 
     if (game['status'] == 'running' && !_hasStarted) {
-      
       _startGame();
-      
     }
   }
 
@@ -1152,6 +1151,13 @@ enum HandType {
   straightFlush,
 }
 
+class PlayingCard {
+  final String suit; // ♠ ♥ ♦ ♣
+  final int rank; // 3–15 (Big Two: 2 = 15)
+  bool selected;
+
+  PlayingCard({required this.suit, required this.rank, this.selected = false});
+}
 // =================== GAME SCREEN ===================
 
 class GameScreen extends StatefulWidget {
@@ -1173,35 +1179,62 @@ class GameScreen extends StatefulWidget {
 class _GameScreenState extends State<GameScreen> {
   final supabase = Supabase.instance.client;
 
-  final TextEditingController _chatController = TextEditingController();
-
   List<Map<String, dynamic>> players = [];
   String? currentTurnPlayer;
   List<String> inPlayArea = [];
 
+  List<PlayingCard> myHand = [
+    PlayingCard(suit: '♠', rank: 3),
+    PlayingCard(suit: '♦', rank: 7),
+    PlayingCard(suit: '♥', rank: 11),
+    PlayingCard(suit: '♣', rank: 15),
+    PlayingCard(suit: '♠', rank: 9),
+    PlayingCard(suit: '♥', rank: 3),
+    PlayingCard(suit: '♦', rank: 12),
+    PlayingCard(suit: '♣', rank: 5),
+    PlayingCard(suit: '♠', rank: 14),
+    PlayingCard(suit: '♦', rank: 4),
+    PlayingCard(suit: '♣', rank: 10),
+    PlayingCard(suit: '♥', rank: 6),
+    PlayingCard(suit: '♠', rank: 8),
+    PlayingCard(suit: '♦', rank: 13),
+  ];
+
+  List<PlayingCard> get selectedCards =>
+      myHand.where((c) => c.selected).toList();
+
+  bool get canPlay => selectedCards.isNotEmpty;
+
   late RealtimeChannel gameChannel;
 
   bool _chatVisible = false; // initially hidden
+  final TextEditingController _chatController = TextEditingController();
   List<Map<String, dynamic>> chatMessages = [];
 
   @override
   void initState() {
     super.initState();
     _subscribeToRealtime();
-
+    
+    _sortHand();
   }
 
-    void _subscribeToRealtime() {
+  void _subscribeToRealtime() {
     gameChannel = supabase.channel('game_channel_${widget.gameId}');
 
     gameChannel.on(
       RealtimeListenTypes.postgresChanges,
-      ChannelFilter(event: '*', schema: 'public', table: 'messages', filter: 'game_id=eq.${widget.gameId}'),
+      ChannelFilter(
+        event: '*',
+        schema: 'public',
+        table: 'messages',
+        filter: 'game_id=eq.${widget.gameId}',
+      ),
       (payload, [ref]) {
         _fetchMessages(); // refresh whenever an insert/update/delete happens
       },
     );
-/*
+    /*
     gameChannel.on(
       RealtimeListenTypes.postgresChanges,
       ChannelFilter(event: '*', schema: 'public', table: 'games', filter: 'id=eq.${widget.gameId}'),
@@ -1211,7 +1244,6 @@ class _GameScreenState extends State<GameScreen> {
     );*/
 
     gameChannel.subscribe();
-    
   }
 
   @override
@@ -1254,10 +1286,89 @@ class _GameScreenState extends State<GameScreen> {
     _fetchMessages();
   }
 
+  _buildOtherPlayers() {
+    // Placeholder for other players' UI
+    return Container();
+  }
+
+  _buildPlayArea() {
+    // Placeholder for play area UI
+    return Container();
+  }
+
+  Widget _buildPlayerHand() {
+    return SizedBox(
+      width: double.infinity,
+      child: Center(
+        child: ReorderableWrap(
+          spacing: 8,
+          runSpacing: 12,
+          alignment: WrapAlignment.center,
+          needsLongPressDraggable: false, // or false if you want instant drag
+          onReorder: (oldIndex, newIndex) {
+            setState(() {
+              final card = myHand.removeAt(oldIndex);
+              myHand.insert(newIndex, card);
+            });
+          },
+          children: myHand.map((card) {
+            return CardWidget(
+              key: ValueKey(
+                '${card.suit}${card.rank}',
+              ), // must have unique key!
+              card: card,
+              onTap: () {
+                setState(() {
+                  card.selected = !card.selected;
+                });
+              },
+            );
+          }).toList(),
+        ),
+      ),
+    );
+  }
+
+  int _suitValue(String suit) {
+    switch (suit) {
+      case '♣':
+        return 1;
+      case '♦':
+        return 0;
+      case '♥':
+        return 2;
+      case '♠':
+        return 3;
+      default:
+        return 0;
+    }
+  }
+
+  void _sortHand() {
+    myHand.sort((a, b) {
+      // 1️⃣ Compare rank (Big Two order)
+      final rankCompare = a.rank.compareTo(b.rank);
+      if (rankCompare != 0) return rankCompare;
+
+      // 2️⃣ Same rank → compare suit
+      return _suitValue(a.suit).compareTo(_suitValue(b.suit));
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(centerTitle: true, title: Text(widget.gameName)),
+      appBar: AppBar(
+        centerTitle: true,
+        title: Text(widget.gameName),
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back),
+          onPressed: () {
+            Navigator.of(context).pop();
+            Navigator.of(context).pop();
+          },
+        ),
+      ),
       body: Stack(
         children: [
           // Main game UI
@@ -1265,8 +1376,35 @@ class _GameScreenState extends State<GameScreen> {
             children: [
               const SizedBox(height: 8),
               Expanded(
-                child: Center(
-                  //card area goes here (includes the )
+                child: LayoutBuilder(
+                  builder: (context, constraints) {
+                    return Column(
+                      children: [
+                        const Spacer(),
+
+                        // --- In-play area (center) ---
+                        Container(
+                          height: 120,
+                          alignment: Alignment.center,
+                          child: const Text(
+                            "Play Area",
+                            style: TextStyle(color: Colors.white),
+                          ),
+                        ),
+
+                        const SizedBox(height: 24),
+
+                        // --- Your hand (centered) ---
+                        Align(
+                          alignment: Alignment.center,
+                          child: _buildPlayerHand(),
+                        ),
+
+                        // --- Space reserved for FABs ---
+                        const SizedBox(height: 140),
+                      ],
+                    );
+                  },
                 ),
               ),
             ],
@@ -1286,9 +1424,7 @@ class _GameScreenState extends State<GameScreen> {
                     children: [
                       FloatingActionButton(
                         heroTag: "passButton",
-                        onPressed: () {
-
-                        },
+                        onPressed: () {},
                         child: const Icon(Icons.cancel_sharp),
                       ),
                       const SizedBox(height: 8),
@@ -1296,7 +1432,7 @@ class _GameScreenState extends State<GameScreen> {
                         heroTag: "chatButton",
                         onPressed: () {
                           setState(() {
-                          _chatVisible = !_chatVisible;
+                            _chatVisible = !_chatVisible;
                           });
                         },
                         child: const Icon(Icons.chat),
@@ -1304,9 +1440,7 @@ class _GameScreenState extends State<GameScreen> {
                       const SizedBox(height: 8),
                       FloatingActionButton(
                         heroTag: "playButton",
-                        onPressed: () {
-
-                        },
+                        onPressed: () {},
                         child: const Icon(Icons.double_arrow),
                       ),
                     ],
@@ -1319,9 +1453,7 @@ class _GameScreenState extends State<GameScreen> {
                       children: [
                         FloatingActionButton(
                           heroTag: "passButton",
-                          onPressed: () {
-
-                          },
+                          onPressed: () {},
                           child: const Icon(Icons.cancel_sharp),
                         ),
                         FloatingActionButton(
@@ -1335,8 +1467,7 @@ class _GameScreenState extends State<GameScreen> {
                         ),
                         FloatingActionButton(
                           heroTag: "playButton",
-                          onPressed: () {
-                          },
+                          onPressed: () {},
                           child: const Icon(Icons.double_arrow),
                         ),
                       ],
@@ -1416,5 +1547,82 @@ class _GameScreenState extends State<GameScreen> {
         ],
       ),
     );
+  }
+}
+
+class CardWidget extends StatelessWidget {
+  final PlayingCard card;
+  final VoidCallback onTap;
+
+  const CardWidget({super.key, required this.card, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 150),
+        margin: EdgeInsets.only(
+          top: card.selected ? 0 : 16,
+          bottom: card.selected ? 16 : 0,
+        ),
+        width: 52,
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(
+            color: card.selected ? Colors.blue : Colors.black,
+            width: card.selected ? 2 : 1,
+          ),
+          boxShadow: card.selected
+              ? [
+                  BoxShadow(
+                    color: Colors.blue.withOpacity(0.4),
+                    blurRadius: 8,
+                    spreadRadius: 1,
+                  ),
+                ]
+              : [],
+        ),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Text(
+              _rankToString(card.rank),
+              style: TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.bold,
+                color: _suitColor(card.suit),
+              ),
+            ),
+            Text(
+              card.suit,
+              style: TextStyle(fontSize: 18, color: _suitColor(card.suit)),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  String _rankToString(int rank) {
+    switch (rank) {
+      case 11:
+        return 'J';
+      case 12:
+        return 'Q';
+      case 13:
+        return 'K';
+      case 14:
+        return 'A';
+      case 15:
+        return '2';
+      default:
+        return rank.toString();
+    }
+  }
+
+  Color _suitColor(String suit) {
+    return (suit == '♥' || suit == '♦') ? Colors.red : Colors.black;
   }
 }

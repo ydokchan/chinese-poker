@@ -12,6 +12,7 @@ dependencies:
   supabase_flutter: ^1.10.25
   shared_preferences: ^2.2.3
   supabase: ^1.11.11
+  reorderables: ^0.6.0
 
 dev_dependencies:
   flutter_test:
