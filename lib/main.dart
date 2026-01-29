@@ -1173,7 +1173,6 @@ class GameScreen extends StatefulWidget {
 class _GameScreenState extends State<GameScreen> {
   final supabase = Supabase.instance.client;
 
-  //final GlobalKey<_CardRowsState> cardRowsKey = GlobalKey<_CardRowsState>();
   final TextEditingController _chatController = TextEditingController();
 
   List<Map<String, dynamic>> players = [];
@@ -1184,9 +1183,6 @@ class _GameScreenState extends State<GameScreen> {
 
   bool _chatVisible = false; // initially hidden
   List<Map<String, dynamic>> chatMessages = [];
-
-  // ignore: unused_field
-  Key _rebuildKey = UniqueKey();
 
   @override
   void initState() {
