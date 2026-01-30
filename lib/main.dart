@@ -1138,7 +1138,6 @@ class _LobbyScreenState extends State<LobbyScreen> {
 // =================== HAND TYPE ENUM ===================
 enum HandType {
   invalid,
-  any,
   empty,
   single,
   pair,
@@ -1190,8 +1189,8 @@ class _GameScreenState extends State<GameScreen> {
 
   List<Map<String, dynamic>> players = [];
   String? currentTurnPlayer;
-  List<String> inPlayArea = [];
 
+  List<String> inPlayArea = [];
   List<PlayingCard> myHand = [];
 
   List<PlayingCard> get selectedCards =>
@@ -1299,199 +1298,210 @@ class _GameScreenState extends State<GameScreen> {
     _fetchMessages();
   }
 
-// Other players' UI Widget
+  // Other players' UI Widget
   _buildOtherPlayers() {
     // Placeholder for other players' UI
     return Container();
   }
 
-// In-play area widget
-Widget _buildPlayArea() {
-  return Container(
-    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-    child: Column(
-      children: [
-        const Text(
-          "Play Area",
-          style: TextStyle(
-            color: Colors.white,
-            fontWeight: FontWeight.bold,
+  // In-play area widget
+  Widget _buildPlayArea() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      child: Column(
+        children: [
+          const Text(
+            "Play Area",
+            style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+          ),
+          //const SizedBox(height: 2),
+          Center(
+            child: Wrap(
+              spacing: 8, // space between cards
+              runSpacing: 8, // space between rows if cards wrap
+              alignment: WrapAlignment.center, // horizontal centering
+              children: inPlayArea.map((c) {
+                return CardWidget(
+                  card: PlayingCard.fromString(c),
+                  onTap: () => {},
+                );
+              }).toList(),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _playSelectedCards() {
+    final selected = myHand
+        .where((c) => c.selected)
+        .map((c) => c.toString())
+        .toList();
+
+    if (selected.isEmpty) return;
+
+    if (!canPlay(selected, inPlayArea)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            "Invalid play: must match type and be higher than the play area!",
           ),
         ),
-        //const SizedBox(height: 2),
-        Center(
-          child: Wrap(
-            spacing: 8,               // space between cards
-            runSpacing: 8,            // space between rows if cards wrap
-            alignment: WrapAlignment.center, // horizontal centering
-            children: inPlayArea.map((c) {
-              return CardWidget(
-                card: PlayingCard.fromString(c),
-                onTap: () => {},
-              );
-            }).toList(),
-          ),
-        ),
-      ],
-    ),
-  );
-}
+      );
+      return;
+    }
 
-void _playSelectedCards() {
-  final selected = myHand.where((c) => c.selected).map((c) => c.toString()).toList();
+    setState(() {
+      inPlayArea.clear();
+      inPlayArea.addAll(selected);
+      myHand.removeWhere((c) => c.selected);
+      for (var c in myHand) {
+        c.selected = false;
+      }
+    });
+  }
 
-  if (selected.isEmpty) return;
+  int cardValueFromString(String card) {
+    final parts = card.split(" "); // ["3", "♣"]
+    final rank = parts[0];
+    var suit = parts[1];
 
-  if (!canPlay(selected, inPlayArea)) {
+    // normalize suit in case there are hidden variation selectors
+    suit = suit.replaceAll('\uFE0F', '').replaceAll('\uFE0E', '');
+
+    final rankIndex = rankOrder.indexOf(rank);
+    final suitIndex = suitOrder.indexOf(suit);
+
+    if (rankIndex == -1 || suitIndex == -1) {
+      throw Exception("Invalid card: $card");
+    }
+
+    return rankIndex * 4 + suitIndex;
+  }
+
+  bool canPlay(List<String> selected, List<String> playArea) {
+    if (selected.isEmpty) return false;
+
+    final selectedType = getHandTypeFromStrings(selected);
+    final tableType = getHandTypeFromStrings(playArea);
+
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text("Invalid play: must match type and be higher than the play area!")),
+      SnackBar(
+        content: Text("${selectedType.toString()} and ${tableType.toString()}"),
+      ),
     );
-    return;
+    // Invalid hand → cannot play
+    if (selectedType == HandType.invalid) return false;
+
+    // Empty table → any valid hand allowed
+    if (tableType == HandType.empty) return true;
+
+    // Type mismatch → invalid play
+    if (selectedType != tableType) return false;
+
+    // Same type → compare by highest card
+    return handValue(selected) > handValue(playArea);
   }
 
-  setState(() {
-    inPlayArea.clear();
-    inPlayArea.addAll(selected);
-    myHand.removeWhere((c) => c.selected);
-    for (var c in myHand) {
-      c.selected = false;
+  int handValue(List<String> cards) {
+    // Highest card in the hand determines strength
+    return cards.map(cardValueFromString).reduce((a, b) => a > b ? a : b);
+  }
+
+  // Determine hand type from list of card strings
+  HandType getHandTypeFromStrings(List<String> cards) {
+    switch (cards.length) {
+      case 0:
+        return HandType.empty;
+      case 1:
+        return HandType.single;
+      case 2:
+        if (_isPair(cards)) return HandType.pair;
+        break;
+      case 3:
+        if (_isTriple(cards)) return HandType.triple;
+        break;
+      case 4:
+        if (_isFourOfAKind(cards)) return HandType.fourOfAKind;
+        if (_isTwoPair(cards)) return HandType.twoPair; 
+        break;
+      case 5:
+        if (_isStraightFlush(cards)) return HandType.straightFlush;
+        if (_isFullHouse(cards)) return HandType.fullHouse;
+        if (_isStraight(cards)) return HandType.straight;
+        if (_isFlush(cards)) return HandType.flush;
+        break;
     }
-  });
-}
 
-int cardValueFromString(String card) {
-  final parts = card.split(" "); // ["3", "♣"]
-  final rank = parts[0];
-  var suit = parts[1];
-
-  // normalize suit in case there are hidden variation selectors
-  suit = suit.replaceAll('\uFE0F', '').replaceAll('\uFE0E', '');
-
-  final rankIndex = rankOrder.indexOf(rank);
-  final suitIndex = suitOrder.indexOf(suit);
-
-  if (rankIndex == -1 || suitIndex == -1) {
-    throw Exception("Invalid card: $card");
+    return HandType.invalid;
   }
 
-  return rankIndex * 4 + suitIndex;
-}
-
-bool canPlay(List<String> selected, List<String> playArea) {
-  if (selected.isEmpty) return false;
-
-  final selectedType = getHandTypeFromStrings(selected);
-  final tableType = getHandTypeFromStrings(playArea);
-
-  ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text("${selectedType.toString()} and ${tableType.toString()}")),
-    );
-  // Invalid hand → cannot play
-  if (selectedType == HandType.invalid) return false;
-
-  // Empty table → any valid hand allowed
-  if (tableType == HandType.empty || tableType == HandType.any) return true;
-
-  // Type mismatch → invalid play
-  if (selectedType != tableType) return false;
-
-  // Same type → compare by highest card
-  return handValue(selected) > handValue(playArea);
-}
-
-int handValue(List<String> cards) {
-  // Highest card in the hand determines strength
-  return cards.map(cardValueFromString).reduce((a, b) => a > b ? a : b);
-}
-
-HandType getHandTypeFromStrings(List<String> cards) {
-  switch (cards.length) {
-    case 0:
-      return HandType.empty;
-    case 1:
-      return HandType.single;
-    case 2:
-      if (_isPair(cards)) return HandType.pair;
-      break;
-    case 3:
-      if (_isTriple(cards)) return HandType.triple;
-      break;
-    case 4:
-      if (_isFourOfAKind(cards)) return HandType.fourOfAKind;
-      if (_isTwoPair(cards)) return HandType.twoPair; // optional for 2-pair game rules
-      break;
-    case 5:
-      if (_isStraightFlush(cards)) return HandType.straightFlush;
-      if (_isFullHouse(cards)) return HandType.fullHouse;
-      if (_isStraight(cards)) return HandType.straight;
-      if (_isFlush(cards)) return HandType.flush;
-      break;
+  bool _isPair(List<String> cards) {
+    if (cards.length != 2) return false;
+    final rank1 = cards[0].split(" ")[0];
+    final rank2 = cards[1].split(" ")[0];
+    return rank1 == rank2;
   }
 
-  return HandType.invalid;
-}
+  bool _isTriple(List<String> cards) {
+    if (cards.length != 3) return false;
+    final rank = cards[0].split(" ")[0];
+    return cards.every((c) => c.split(" ")[0] == rank);
+  }
 
-bool _isPair(List<String> cards) {
-  if (cards.length != 2) return false;
-  final rank1 = cards[0].split(" ")[0];
-  final rank2 = cards[1].split(" ")[0];
-  return rank1 == rank2;
-}
+  bool _isFourOfAKind(List<String> cards) {
+    if (cards.length != 4) return false;
+    final rank = cards[0].split(" ")[0];
+    return cards.every((c) => c.split(" ")[0] == rank);
+  }
 
-bool _isTriple(List<String> cards) {
-  if (cards.length != 3) return false;
-  final rank = cards[0].split(" ")[0];
-  return cards.every((c) => c.split(" ")[0] == rank);
-}
+  bool _isTwoPair(List<String> cards) {
+    if (cards.length != 4) return false;
+    final ranks = cards.map((c) => c.split(" ")[0]).toList();
+    final uniqueRanks = ranks.toSet();
+    if (uniqueRanks.length != 2) return false;
+    final rankCounts = uniqueRanks
+        .map((r) => ranks.where((x) => x == r).length)
+        .toList();
+    return rankCounts.every((count) => count == 2);
+  }
 
-bool _isFourOfAKind(List<String> cards) {
-  if (cards.length != 4) return false;
-  final rank = cards[0].split(" ")[0];
-  return cards.every((c) => c.split(" ")[0] == rank);
-}
-
-bool _isTwoPair(List<String> cards) {
-  if (cards.length != 4) return false;
-  final ranks = cards.map((c) => c.split(" ")[0]).toList();
-  final uniqueRanks = ranks.toSet();
-  if (uniqueRanks.length != 2) return false;
-  final rankCounts = uniqueRanks.map((r) => ranks.where((x) => x == r).length).toList();
-  return rankCounts.every((count) => count == 2);
-}
-
-bool _isStraight(List<String> cards) {
-  if (cards.length != 5) return false;
-  final ranks = cards.map((c) => c.split(" ")[0]).toList();
-  final rankIndices = ranks.map((r) => rankOrder.indexOf(r)).toList();
-  rankIndices.sort();
-  for (int i = 0; i < rankIndices.length - 1; i++) {
-    if (rankIndices[i + 1] != rankIndices[i] + 1) {
-      return false;
+  bool _isStraight(List<String> cards) {
+    if (cards.length != 5) return false;
+    final ranks = cards.map((c) => c.split(" ")[0]).toList();
+    final rankIndices = ranks.map((r) => rankOrder.indexOf(r)).toList();
+    rankIndices.sort();
+    for (int i = 0; i < rankIndices.length - 1; i++) {
+      if (rankIndices[i + 1] != rankIndices[i] + 1) {
+        return false;
+      }
     }
+    return true;
   }
-  return true;
-}
 
-bool _isFlush(List<String> cards) {
-  if (cards.length != 5) return false;
-  final suit = cards[0].split(" ")[1];
-  return cards.every((c) => c.split(" ")[1] == suit);
-}
+  bool _isFlush(List<String> cards) {
+    if (cards.length != 5) return false;
+    final suit = cards[0].split(" ")[1];
+    return cards.every((c) => c.split(" ")[1] == suit);
+  }
 
-bool _isFullHouse(List<String> cards) {
-  if (cards.length != 5) return false;
-  final ranks = cards.map((c) => c.split(" ")[0]).toList();
-  final uniqueRanks = ranks.toSet();
-  if (uniqueRanks.length != 2) return false;
-  final rankCounts = uniqueRanks.map((r) => ranks.where((x) => x == r).length).toList();
-  return (rankCounts.contains(3) && rankCounts.contains(2));
-}
+  bool _isFullHouse(List<String> cards) {
+    if (cards.length != 5) return false;
+    final ranks = cards.map((c) => c.split(" ")[0]).toList();
+    final uniqueRanks = ranks.toSet();
+    if (uniqueRanks.length != 2) return false;
+    final rankCounts = uniqueRanks
+        .map((r) => ranks.where((x) => x == r).length)
+        .toList();
+    return (rankCounts.contains(3) && rankCounts.contains(2));
+  }
 
-bool _isStraightFlush(List<String> cards) {
-  return _isStraight(cards) && _isFlush(cards);
-}
+  bool _isStraightFlush(List<String> cards) {
+    return _isStraight(cards) && _isFlush(cards);
+  }
 
-//Player's hand 
+  //Player's hand
   Widget _buildPlayerHand() {
     return SizedBox(
       width: double.infinity,
@@ -1525,7 +1535,7 @@ bool _isStraightFlush(List<String> cards) {
     );
   }
 
-    Future<void> _loadMyHand() async {
+  Future<void> _loadMyHand() async {
     final data = await supabase
         .from('active_players')
         .select('cards_in_hand')
