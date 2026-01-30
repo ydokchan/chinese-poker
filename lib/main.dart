@@ -987,7 +987,6 @@ class _LobbyScreenState extends State<LobbyScreen> {
             "A",
             "2",
           ];
-          //List<String> ranks = ["3", "4"];
           List<String> deck = [
             for (var s in suits)
               for (var r in ranks) "$r $s",
@@ -1188,10 +1187,15 @@ class _GameScreenState extends State<GameScreen> {
   final supabase = Supabase.instance.client;
 
   List<Map<String, dynamic>> players = [];
+
+  Map<String, int> cardsRemaining = {};
+  List<String> turnOrder = [];
   String? currentTurnPlayer;
+  
 
   List<String> inPlayArea = [];
   List<PlayingCard> myHand = [];
+  
 
   List<PlayingCard> get selectedCards =>
       myHand.where((c) => c.selected).toList();
@@ -1226,9 +1230,13 @@ class _GameScreenState extends State<GameScreen> {
   void initState() {
     super.initState();
     _subscribeToRealtime();
-
+    
     // Load this player's hand from Supabase and sort it
     _loadMyHand();
+
+    // Load turn order and current turn player
+    _loadTurnOrder();
+    _loadCardsRemaining();
   }
 
   void _subscribeToRealtime() {
@@ -1299,10 +1307,96 @@ class _GameScreenState extends State<GameScreen> {
   }
 
   // Other players' UI Widget
-  _buildOtherPlayers() {
-    // Placeholder for other players' UI
-    return Container();
+Widget _buildOtherPlayers() {
+  if (turnOrder.isEmpty) {
+    return const SizedBox(height: 50);
   }
+
+  return Container(
+    padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+    height: 50,
+    color: Colors.black12,
+    child: Row(
+      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+      children: turnOrder.map((player) {
+        final isTurn = (player == currentTurnPlayer);
+        final cardCount = cardsRemaining[player] ?? 0;
+
+        return AnimatedContainer(
+          duration: const Duration(milliseconds: 200),
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+          decoration: BoxDecoration(
+            color: isTurn ? Colors.yellow.shade700 : Colors.grey.shade800,
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(
+              color: isTurn ? Colors.orange : Colors.white30,
+              width: isTurn ? 2 : 1,
+            ),
+          ),
+          child: Row(
+            children: [
+              Icon(
+                Icons.person,
+                color: isTurn ? Colors.black : Colors.white,
+                size: 16,
+              ),
+              const SizedBox(width: 4),
+              Text(
+                player,
+                style: TextStyle(
+                  fontWeight: FontWeight.bold,
+                  color: isTurn ? Colors.black : Colors.white,
+                  fontSize: 12,
+                ),
+              ),
+              const SizedBox(width: 6),
+              Text(
+                "$cardCount",
+                style: TextStyle(
+                  color: isTurn ? Colors.black87 : Colors.white70,
+                  fontSize: 12,
+                ),
+              ),
+            ],
+          ),
+        );
+      }).toList(),
+    ),
+  );
+}
+
+
+
+
+  Future<void> _loadTurnOrder() async {
+  final data = await supabase
+      .from('games')
+      .select('turn_order, current_turn_player_username')
+      .eq('id', widget.gameId)
+      .single();
+
+  if (!mounted) return;
+
+  setState(() {
+    turnOrder = List<String>.from(data['turn_order']);
+    currentTurnPlayer = data['current_turn_player_username'];
+  });
+}
+
+Future<void> _loadCardsRemaining() async {
+  final data = await supabase
+      .from('active_players')
+      .select('username, cards_remaining')
+      .eq('game_id', widget.gameId);
+
+  if (!mounted) return;
+
+  setState(() {
+    cardsRemaining = {
+      for (var p in data) p['username']: p['cards_remaining'] as int
+    };
+  });
+}
 
   // In-play area widget
   Widget _buildPlayArea() {
@@ -1386,11 +1480,6 @@ class _GameScreenState extends State<GameScreen> {
     final selectedType = getHandTypeFromStrings(selected);
     final tableType = getHandTypeFromStrings(playArea);
 
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text("${selectedType.toString()} and ${tableType.toString()}"),
-      ),
-    );
     // Invalid hand → cannot play
     if (selectedType == HandType.invalid) return false;
 
@@ -1501,6 +1590,16 @@ class _GameScreenState extends State<GameScreen> {
     return _isStraight(cards) && _isFlush(cards);
   }
 
+  void _passTurn() {
+    // Logic to pass the turn
+    // For now, just clear the play area
+    setState(() {
+      inPlayArea.clear();
+      for (var c in myHand) {
+        c.selected = false;
+      }
+    });
+  }
   //Player's hand
   Widget _buildPlayerHand() {
     return SizedBox(
@@ -1586,6 +1685,8 @@ class _GameScreenState extends State<GameScreen> {
           // Main game UI
           Column(
             children: [
+              _buildOtherPlayers(),
+    const SizedBox(height: 8),
               const SizedBox(height: 8),
               Expanded(
                 child: LayoutBuilder(
@@ -1632,7 +1733,7 @@ class _GameScreenState extends State<GameScreen> {
                     children: [
                       FloatingActionButton(
                         heroTag: "passButton",
-                        onPressed: () {},
+                        onPressed: () { _passTurn(); },
                         child: const Icon(Icons.cancel_sharp),
                       ),
                       const SizedBox(height: 8),
@@ -1663,7 +1764,7 @@ class _GameScreenState extends State<GameScreen> {
                       children: [
                         FloatingActionButton(
                           heroTag: "passButton",
-                          onPressed: () {},
+                          onPressed: () { _passTurn(); },
                           child: const Icon(Icons.cancel_sharp),
                         ),
                         FloatingActionButton(
