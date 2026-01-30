@@ -987,7 +987,7 @@ class _LobbyScreenState extends State<LobbyScreen> {
             "A",
             "2",
           ];*/
-          List<String> ranks = ["3"];
+          List<String> ranks = ["3", "4"];
           List<String> deck = [
             for (var s in suits)
               for (var r in ranks) "$r $s",
@@ -1152,11 +1152,19 @@ enum HandType {
 }
 
 class PlayingCard {
-  final String suit; // ♠ ♥ ♦ ♣
-  final int rank; // 3–15 (Big Two: 2 = 15)
+  final String rank;
+  final String suit;
   bool selected;
 
-  PlayingCard({required this.suit, required this.rank, this.selected = false});
+  PlayingCard({required this.rank, required this.suit, this.selected = false});
+
+  factory PlayingCard.fromString(String s) {
+    final parts = s.split(" ");
+    return PlayingCard(rank: parts[0], suit: parts[1]);
+  }
+
+  @override
+  String toString() => "$rank $suit";
 }
 // =================== GAME SCREEN ===================
 
@@ -1183,27 +1191,13 @@ class _GameScreenState extends State<GameScreen> {
   String? currentTurnPlayer;
   List<String> inPlayArea = [];
 
-  List<PlayingCard> myHand = [
-    PlayingCard(suit: '♠', rank: 3),
-    PlayingCard(suit: '♦', rank: 7),
-    PlayingCard(suit: '♥', rank: 11),
-    PlayingCard(suit: '♣', rank: 15),
-    PlayingCard(suit: '♠', rank: 9),
-    PlayingCard(suit: '♥', rank: 3),
-    PlayingCard(suit: '♦', rank: 12),
-    PlayingCard(suit: '♣', rank: 5),
-    PlayingCard(suit: '♠', rank: 14),
-    PlayingCard(suit: '♦', rank: 4),
-    PlayingCard(suit: '♣', rank: 10),
-    PlayingCard(suit: '♥', rank: 6),
-    PlayingCard(suit: '♠', rank: 8),
-    PlayingCard(suit: '♦', rank: 13),
-  ];
+  List<PlayingCard> myHand = [];
 
   List<PlayingCard> get selectedCards =>
       myHand.where((c) => c.selected).toList();
 
   bool get canPlay => selectedCards.isNotEmpty;
+  bool initialSort = false;
 
   late RealtimeChannel gameChannel;
 
@@ -1215,8 +1209,9 @@ class _GameScreenState extends State<GameScreen> {
   void initState() {
     super.initState();
     _subscribeToRealtime();
-    
-    _sortHand();
+
+    // Load this player's hand from Supabase and sort it
+    _loadMyHand();
   }
 
   void _subscribeToRealtime() {
@@ -1291,9 +1286,75 @@ class _GameScreenState extends State<GameScreen> {
     return Container();
   }
 
-  _buildPlayArea() {
-    // Placeholder for play area UI
-    return Container();
+Widget _buildPlayArea() {
+  return Container(
+    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+    child: Column(
+      children: [
+        const Text(
+          "Play Area",
+          style: TextStyle(
+            color: Colors.white,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        //const SizedBox(height: 2),
+        Center(
+          child: Wrap(
+            spacing: 8,               // space between cards
+            runSpacing: 8,            // space between rows if cards wrap
+            alignment: WrapAlignment.center, // horizontal centering
+            children: inPlayArea.map((c) {
+              return CardWidget(
+                card: PlayingCard.fromString(c),
+                onTap: () => {},
+              );
+            }).toList(),
+          ),
+        ),
+      ],
+    ),
+  );
+}
+
+  Future<void> _loadMyHand() async {
+    final data = await supabase
+        .from('active_players')
+        .select('cards_in_hand')
+        .eq('game_id', widget.gameId)
+        .eq('username', widget.playerName)
+        .single();
+
+    final List<dynamic> array = data['cards_in_hand'];
+
+    setState(() {
+      myHand = array.map((s) => PlayingCard.fromString(s.toString())).toList();
+    });
+
+    if (!initialSort) {
+      _sortHand();
+      initialSort = true;
+    }
+  }
+
+  void _playSelectedCards() {
+    setState(() {
+      // 1️⃣ Find all selected cards
+      final selected = myHand.where((c) => c.selected).toList();
+
+      if (selected.isEmpty) return; // nothing selected
+
+      // 2️⃣ Move them to the play area
+      inPlayArea.addAll(
+        selected.map((c) => c.toString()),
+      ); // or store CardModel
+
+      // 3️⃣ Remove them from player's hand
+      myHand.removeWhere((c) => c.selected);
+
+      // 4️⃣ Deselect cards (just in case)
+      for (var c in selected) c.selected = false;
+    });
   }
 
   Widget _buildPlayerHand() {
@@ -1344,14 +1405,33 @@ class _GameScreenState extends State<GameScreen> {
     }
   }
 
-  void _sortHand() {
-    myHand.sort((a, b) {
-      // 1️⃣ Compare rank (Big Two order)
-      final rankCompare = a.rank.compareTo(b.rank);
-      if (rankCompare != 0) return rankCompare;
+  static const rankOrder = [
+    "3",
+    "4",
+    "5",
+    "6",
+    "7",
+    "8",
+    "9",
+    "10",
+    "J",
+    "Q",
+    "K",
+    "A",
+    "2",
+  ];
 
-      // 2️⃣ Same rank → compare suit
-      return _suitValue(a.suit).compareTo(_suitValue(b.suit));
+  static const suitOrder = ["♦", "♣", "♥", "♠"];
+
+  void _sortHand() {
+    setState(() {
+      myHand.sort((a, b) {
+        final r = rankOrder
+            .indexOf(a.rank)
+            .compareTo(rankOrder.indexOf(b.rank));
+        if (r != 0) return r;
+        return suitOrder.indexOf(a.suit).compareTo(suitOrder.indexOf(b.suit));
+      });
     });
   }
 
@@ -1380,19 +1460,15 @@ class _GameScreenState extends State<GameScreen> {
                   builder: (context, constraints) {
                     return Column(
                       children: [
-                        const Spacer(),
+                        const Spacer(flex: 3),
 
                         // --- In-play area (center) ---
-                        Container(
-                          height: 120,
+                        Align(
                           alignment: Alignment.center,
-                          child: const Text(
-                            "Play Area",
-                            style: TextStyle(color: Colors.white),
-                          ),
+                          child: _buildPlayArea(),
                         ),
 
-                        const SizedBox(height: 24),
+                        const Spacer(flex: 1),
 
                         // --- Your hand (centered) ---
                         Align(
@@ -1401,7 +1477,7 @@ class _GameScreenState extends State<GameScreen> {
                         ),
 
                         // --- Space reserved for FABs ---
-                        const SizedBox(height: 140),
+                        const Spacer(flex: 1),
                       ],
                     );
                   },
@@ -1440,7 +1516,9 @@ class _GameScreenState extends State<GameScreen> {
                       const SizedBox(height: 8),
                       FloatingActionButton(
                         heroTag: "playButton",
-                        onPressed: () {},
+                        onPressed: () {
+                          _playSelectedCards();
+                        },
                         child: const Icon(Icons.double_arrow),
                       ),
                     ],
@@ -1467,7 +1545,9 @@ class _GameScreenState extends State<GameScreen> {
                         ),
                         FloatingActionButton(
                           heroTag: "playButton",
-                          onPressed: () {},
+                          onPressed: () {
+                            _playSelectedCards();
+                          },
                           child: const Icon(Icons.double_arrow),
                         ),
                       ],
@@ -1577,6 +1657,7 @@ class CardWidget extends StatelessWidget {
           boxShadow: card.selected
               ? [
                   BoxShadow(
+                    // ignore: deprecated_member_use
                     color: Colors.blue.withOpacity(0.4),
                     blurRadius: 8,
                     spreadRadius: 1,
@@ -1588,7 +1669,7 @@ class CardWidget extends StatelessWidget {
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             Text(
-              _rankToString(card.rank),
+              card.rank,
               style: TextStyle(
                 fontSize: 16,
                 fontWeight: FontWeight.bold,
