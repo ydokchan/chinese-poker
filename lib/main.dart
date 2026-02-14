@@ -1427,7 +1427,7 @@ Future<void> _loadCardsRemaining() async {
     );
   }
 
-  void _playSelectedCards() {
+  void _playSelectedCards() async {
     final selected = myHand
         .where((c) => c.selected)
         .map((c) => c.toString())
