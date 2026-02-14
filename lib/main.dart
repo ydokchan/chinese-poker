@@ -1191,16 +1191,19 @@ class _GameScreenState extends State<GameScreen> {
   Map<String, int> cardsRemaining = {};
   List<String> turnOrder = [];
   String? currentTurnPlayer;
-  
 
   List<String> inPlayArea = [];
   List<PlayingCard> myHand = [];
-  
 
   List<PlayingCard> get selectedCards =>
       myHand.where((c) => c.selected).toList();
 
   bool initialSort = false;
+  bool startOfGame = true;
+  bool startOfRound = true;
+
+  int playersPassedThisHand = 0;
+  int numberOfPlayers = 0;
 
   late RealtimeChannel gameChannel;
 
@@ -1230,15 +1233,34 @@ class _GameScreenState extends State<GameScreen> {
   void initState() {
     super.initState();
     _subscribeToRealtime();
-    
+
     // Load this player's hand from Supabase and sort it
     _loadMyHand();
 
     // Load turn order and current turn player
     _loadTurnOrder();
-    _loadCardsRemaining();
+    _loadCardsRemainingAndPassedState();
+
+    //Reload play area
+    _loadPlayArea();
+
+
+    // Load number of players
+    _loadNumberOfPlayers();
   }
 
+  Future<void> _loadNumberOfPlayers() async {
+    final rows = await supabase
+        .from('active_players')
+        .select('username')
+        .eq('game_id', widget.gameId);
+
+    setState(() {
+      numberOfPlayers = rows.length;
+    });
+  }
+
+  // Realtime handling
   void _subscribeToRealtime() {
     gameChannel = supabase.channel('game_channel_${widget.gameId}');
 
@@ -1254,14 +1276,19 @@ class _GameScreenState extends State<GameScreen> {
         _fetchMessages(); // refresh whenever an insert/update/delete happens
       },
     );
-    /*
+
     gameChannel.on(
       RealtimeListenTypes.postgresChanges,
-      ChannelFilter(event: '*', schema: 'public', table: 'games', filter: 'id=eq.${widget.gameId}'),
+      ChannelFilter(
+        event: '*',
+        schema: 'public',
+        table: 'games',
+        filter: 'id=eq.${widget.gameId}',
+      ),
       (payload, [ref]) {
-        _fetchGameState(); // refresh whenever an insert/update/delete happens
+        _reloadGameState();
       },
-    );*/
+    );
 
     gameChannel.subscribe();
   }
@@ -1273,6 +1300,49 @@ class _GameScreenState extends State<GameScreen> {
     super.dispose();
   }
 
+  //
+  void _reloadGameState() {
+    // Reload other players and turn info
+    _loadTurnOrder();
+    _loadCardsRemainingAndPassedState();
+
+    //Reload play area
+    _loadPlayArea();
+
+    // Check for end of round/game
+    _checkEndOfRoundOrGame();
+  }
+
+  Future<void> _checkEndOfRoundOrGame() async {
+
+    playersPassedThisHand = await supabase.from('games').select('players_passed').eq('id', widget.gameId).single().then((res) => res['players_passed'] ?? 0);
+
+    if (myHand.isEmpty) {
+      // This player has won the game
+      print("${widget.playerName} has won the game!");
+    } else if (playersPassedThisHand >= numberOfPlayers - 1) {
+      // All other players have passed, round over
+      print("${widget.playerName} has won the game!");
+
+      Future<String?> nextPlayer = returnNextPlayer(currentTurnPlayer!);
+
+      // Reset for next round, but keep the same turn order
+      await supabase.from('games').update({
+        'start_of_round': true,
+        'players_passed': 0,
+        'current_turn_player_username': await nextPlayer,
+        'in_play_area': [],
+      }).eq('id', widget.gameId);
+
+      await supabase.from('active_players').update({
+        'passed_current_hand': false,
+      }).eq('game_id', widget.gameId);
+
+      print('Round reset');
+    }
+  }
+
+  //Message logic
   Future<void> _fetchMessages() async {
     final msgs = await supabase
         .from('messages')
@@ -1307,96 +1377,113 @@ class _GameScreenState extends State<GameScreen> {
   }
 
   // Other players' UI Widget
-Widget _buildOtherPlayers() {
-  if (turnOrder.isEmpty) {
-    return const SizedBox(height: 50);
+  Widget _buildOtherPlayers() {
+    if (turnOrder.isEmpty) {
+      return const SizedBox(height: 50);
+    }
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+      height: 50,
+      color: Colors.black12,
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+        children: turnOrder.map((player) {
+          final isTurn = (player == currentTurnPlayer);
+          final cardCount = cardsRemaining[player] ?? 0;
+
+          return AnimatedContainer(
+            duration: const Duration(milliseconds: 200),
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+            decoration: BoxDecoration(
+              color: isTurn ? Colors.yellow.shade700 : Colors.grey.shade800,
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(
+                color: isTurn ? Colors.orange : Colors.white30,
+                width: isTurn ? 2 : 1,
+              ),
+            ),
+            child: Row(
+              children: [
+                Icon(
+                  Icons.person,
+                  color: isTurn ? Colors.black : Colors.white,
+                  size: 16,
+                ),
+                const SizedBox(width: 4),
+                Text(
+                  player,
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    color: isTurn ? Colors.black : Colors.white,
+                    fontSize: 12,
+                  ),
+                ),
+                const SizedBox(width: 6),
+                Text(
+                  "$cardCount",
+                  style: TextStyle(
+                    color: isTurn ? Colors.black87 : Colors.white70,
+                    fontSize: 12,
+                  ),
+                ),
+              ],
+            ),
+          );
+        }).toList(),
+      ),
+    );
   }
 
-  return Container(
-    padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
-    height: 50,
-    color: Colors.black12,
-    child: Row(
-      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-      children: turnOrder.map((player) {
-        final isTurn = (player == currentTurnPlayer);
-        final cardCount = cardsRemaining[player] ?? 0;
-
-        return AnimatedContainer(
-          duration: const Duration(milliseconds: 200),
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-          decoration: BoxDecoration(
-            color: isTurn ? Colors.yellow.shade700 : Colors.grey.shade800,
-            borderRadius: BorderRadius.circular(10),
-            border: Border.all(
-              color: isTurn ? Colors.orange : Colors.white30,
-              width: isTurn ? 2 : 1,
-            ),
-          ),
-          child: Row(
-            children: [
-              Icon(
-                Icons.person,
-                color: isTurn ? Colors.black : Colors.white,
-                size: 16,
-              ),
-              const SizedBox(width: 4),
-              Text(
-                player,
-                style: TextStyle(
-                  fontWeight: FontWeight.bold,
-                  color: isTurn ? Colors.black : Colors.white,
-                  fontSize: 12,
-                ),
-              ),
-              const SizedBox(width: 6),
-              Text(
-                "$cardCount",
-                style: TextStyle(
-                  color: isTurn ? Colors.black87 : Colors.white70,
-                  fontSize: 12,
-                ),
-              ),
-            ],
-          ),
-        );
-      }).toList(),
-    ),
-  );
-}
-
-
-
-
   Future<void> _loadTurnOrder() async {
-  final data = await supabase
-      .from('games')
-      .select('turn_order, current_turn_player_username')
-      .eq('id', widget.gameId)
-      .single();
+    // Load turn order and current turn player from Supabase
+    var data = {};
 
-  if (!mounted) return;
+    if (startOfGame) {
+      data = await supabase
+          .from('games')
+          .select(
+            'turn_order, current_turn_player_username, start_of_game, start_of_round, players_passed',
+          )
+          .eq('id', widget.gameId)
+          .single();
 
-  setState(() {
-    turnOrder = List<String>.from(data['turn_order']);
-    currentTurnPlayer = data['current_turn_player_username'];
-  });
-}
+      startOfGame = data['start_of_game'] ?? true;
+      playersPassedThisHand = data['players_passed'] ?? 0;
+    } else {
+      data = await supabase
+          .from('games')
+          .select('turn_order, current_turn_player_username, start_of_round, players_passed')
+          .eq('id', widget.gameId)
+          .single();
+    }
+    startOfRound = data['start_of_round'] ?? false;
+    playersPassedThisHand = data['players_passed'] ?? 0;
 
-Future<void> _loadCardsRemaining() async {
-  final data = await supabase
-      .from('active_players')
-      .select('username, cards_remaining')
-      .eq('game_id', widget.gameId);
 
-  if (!mounted) return;
+    if (!mounted) return;
 
-  setState(() {
-    cardsRemaining = {
-      for (var p in data) p['username']: p['cards_remaining'] as int
-    };
-  });
-}
+    setState(() {
+      turnOrder = List<String>.from(data['turn_order']);
+      currentTurnPlayer = data['current_turn_player_username'];
+    });
+  }
+
+  Future<void> _loadCardsRemainingAndPassedState() async {
+    final data = await supabase
+        .from('active_players')
+        .select('username, cards_remaining, passed_current_hand')
+        .eq('game_id', widget.gameId);
+
+    if (!mounted) return;
+
+    
+    setState(() {
+      cardsRemaining = {
+        for (var p in data) p['username']: p['cards_remaining'] as int,
+      };
+    });
+  }
 
   // In-play area widget
   Widget _buildPlayArea() {
@@ -1435,6 +1522,15 @@ Future<void> _loadCardsRemaining() async {
 
     if (selected.isEmpty) return;
 
+    // Check if it's this player's turn
+    if (currentTurnPlayer != widget.playerName) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Invalid play: not your turn!")),
+      );
+      return;
+    }
+
+    // Check if the play is valid
     if (!canPlay(selected, inPlayArea)) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -1446,6 +1542,28 @@ Future<void> _loadCardsRemaining() async {
       return;
     }
 
+    // Check if start of game and must play 3 ♦
+    if (startOfGame) {
+      if (!selected.contains('3 ♦')) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text("Invalid play: first play must include 3 ♦"),
+          ),
+        );
+        return;
+      } else {
+        startOfGame = false; // only for the very first play
+        startOfRound = false; // reset start of round as well
+      }
+    } else if (startOfRound) {
+      startOfRound = false; // reset start of round after the first play
+    }
+
+    //Sort selected cards before playing
+    selected.sort(
+      (a, b) => cardValueFromString(a).compareTo(cardValueFromString(b)),
+    );
+
     setState(() {
       inPlayArea.clear();
       inPlayArea.addAll(selected);
@@ -1454,6 +1572,25 @@ Future<void> _loadCardsRemaining() async {
         c.selected = false;
       }
     });
+
+    //Move Turn to next player
+    Future<String?> nextPlayer = returnNextPlayer(currentTurnPlayer!);
+    //Supabase updates
+    await supabase
+        .from('games')
+        .update({
+          'in_play_area': inPlayArea,
+          'current_turn_player_username': await nextPlayer,
+          'start_of_game': startOfGame,
+          'start_of_round': startOfRound,
+        })
+        .eq('id', widget.gameId);
+
+    await supabase
+        .from('active_players')
+        .update({'cards_remaining': myHand.length})
+        .eq('game_id', widget.gameId)
+        .eq('username', widget.playerName);
   }
 
   int cardValueFromString(String card) {
@@ -1478,16 +1615,16 @@ Future<void> _loadCardsRemaining() async {
     if (selected.isEmpty) return false;
 
     final selectedType = getHandTypeFromStrings(selected);
-    final tableType = getHandTypeFromStrings(playArea);
+    final inPlayType = getHandTypeFromStrings(playArea);
 
     // Invalid hand → cannot play
     if (selectedType == HandType.invalid) return false;
 
-    // Empty table → any valid hand allowed
-    if (tableType == HandType.empty) return true;
+    // Empty play area → any valid hand allowed
+    if (inPlayType == HandType.empty) return true;
 
     // Type mismatch → invalid play
-    if (selectedType != tableType) return false;
+    if (selectedType != inPlayType) return false;
 
     // Same type → compare by highest card
     return handValue(selected) > handValue(playArea);
@@ -1496,6 +1633,20 @@ Future<void> _loadCardsRemaining() async {
   int handValue(List<String> cards) {
     // Highest card in the hand determines strength
     return cards.map(cardValueFromString).reduce((a, b) => a > b ? a : b);
+  }
+
+  void _loadPlayArea() async {
+    final data = await supabase
+        .from('games')
+        .select('in_play_area')
+        .eq('id', widget.gameId)
+        .single();
+
+    if (!mounted) return;
+
+    setState(() {
+      inPlayArea = List<String>.from(data['in_play_area'] ?? []);
+    });
   }
 
   // Determine hand type from list of card strings
@@ -1513,7 +1664,7 @@ Future<void> _loadCardsRemaining() async {
         break;
       case 4:
         if (_isFourOfAKind(cards)) return HandType.fourOfAKind;
-        if (_isTwoPair(cards)) return HandType.twoPair; 
+        if (_isTwoPair(cards)) return HandType.twoPair;
         break;
       case 5:
         if (_isStraightFlush(cards)) return HandType.straightFlush;
@@ -1590,16 +1741,82 @@ Future<void> _loadCardsRemaining() async {
     return _isStraight(cards) && _isFlush(cards);
   }
 
-  void _passTurn() {
-    // Logic to pass the turn
-    // For now, just clear the play area
+  void _passTurn() async{
+    if (currentTurnPlayer != widget.playerName) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Invalid action: not your turn!")),
+      );
+      return;
+    }
+
+    // If start of round, cannot pass
+    if (startOfRound) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text("Invalid action: cannot pass at start of round!"),
+        ),
+      );
+      return;
+    }
+    //Supabase updates
+    Future<String?> nextPlayer = returnNextPlayer(currentTurnPlayer!);
+    await supabase.from('games').update({
+      'current_turn_player_username': await nextPlayer,
+      'players_passed': playersPassedThisHand + 1,
+    }).eq('id', widget.gameId);
+
+    await supabase.from('active_players').update({
+      'passed_current_hand': true,
+    }).eq('game_id', widget.gameId).eq('username', widget.playerName);
+    // Move turn to next player
     setState(() {
-      inPlayArea.clear();
-      for (var c in myHand) {
-        c.selected = false;
-      }
     });
   }
+
+Future<String?> returnNextPlayer(String currentPlayer) async {
+  // Load turn order
+  final gameRow = await supabase
+      .from('games')
+      .select('turn_order')
+      .eq('id', widget.gameId)
+      .single();
+
+  final List<dynamic> turnOrder = gameRow['turn_order'];
+
+  // Load player pass states
+  final passRows = await supabase
+      .from('active_players')
+      .select('username, passed_current_hand')
+      .eq('game_id', widget.gameId);  // <-- FIXED HERE
+
+  // Build map: username -> has passed
+  final Map<String, bool> passedMap = {};
+  for (final row in passRows) {
+    passedMap[row['username']] = (row['passed_current_hand'] == true);
+  }
+
+  // Find index of current player in turn order
+  final int currentIndex = turnOrder.indexOf(currentPlayer);
+  if (currentIndex == -1) return null;
+
+  // Find the next player who has NOT passed
+  for (int i = 1; i <= turnOrder.length; i++) {
+    final int checkIndex = (currentIndex + i) % turnOrder.length;
+    final String nextCandidate = turnOrder[checkIndex];
+
+    final hasPassed = passedMap[nextCandidate] ?? false;
+
+    if (!hasPassed) {
+      return nextCandidate;
+    }
+  }
+
+  // All players passed → end of round
+  return null;
+}
+
+
+
   //Player's hand
   Widget _buildPlayerHand() {
     return SizedBox(
@@ -1686,7 +1903,7 @@ Future<void> _loadCardsRemaining() async {
           Column(
             children: [
               _buildOtherPlayers(),
-    const SizedBox(height: 8),
+              const SizedBox(height: 8),
               const SizedBox(height: 8),
               Expanded(
                 child: LayoutBuilder(
@@ -1733,7 +1950,9 @@ Future<void> _loadCardsRemaining() async {
                     children: [
                       FloatingActionButton(
                         heroTag: "passButton",
-                        onPressed: () { _passTurn(); },
+                        onPressed: () {
+                          _passTurn();
+                        },
                         child: const Icon(Icons.cancel_sharp),
                       ),
                       const SizedBox(height: 8),
@@ -1764,7 +1983,9 @@ Future<void> _loadCardsRemaining() async {
                       children: [
                         FloatingActionButton(
                           heroTag: "passButton",
-                          onPressed: () { _passTurn(); },
+                          onPressed: () {
+                            _passTurn();
+                          },
                           child: const Icon(Icons.cancel_sharp),
                         ),
                         FloatingActionButton(
