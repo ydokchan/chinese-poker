@@ -141,7 +141,10 @@ class _HomeScreenState extends State<HomeScreen> {
 
     Navigator.push(
       context,
-      MaterialPageRoute(builder: (context) => const JoinGameScreen()),
+      MaterialPageRoute(
+        settings: const RouteSettings(name: JoinGameScreen.routeName),
+        builder: (context) => const JoinGameScreen(),
+      ),
     ).then((_) => _loadCurrentUser());
   }
 
@@ -510,6 +513,8 @@ class _StatsScreenState extends State<StatsScreen> {
 
 // =================== JOIN GAME SCREEN ===================
 class JoinGameScreen extends StatefulWidget {
+  static const routeName = "JoinGameScreen";
+
   const JoinGameScreen({super.key});
 
   @override
@@ -712,6 +717,9 @@ class _JoinGameScreenState extends State<JoinGameScreen> {
                           Navigator.push(
                             context,
                             MaterialPageRoute(
+                              settings: const RouteSettings(
+                                name: LobbyScreen.routeName,
+                              ),
                               builder: (context) => LobbyScreen(
                                 gameId: gameId.toString(),
                                 gameName: gameName,
@@ -853,6 +861,7 @@ class LobbyScreen extends StatefulWidget {
   final String gameId;
   final String gameName;
   final String playerName;
+  static const routeName = "LobbyScreen";
 
   const LobbyScreen({
     super.key,
@@ -972,7 +981,7 @@ class _LobbyScreenState extends State<LobbyScreen> {
           // Generate and assign cards to each player
           // 1️⃣ Full deck
           List<String> suits = ["♦", "♣", "♥", "♠"];
-          List<String> ranks = [
+          /*List<String> ranks = [
             "3",
             "4",
             "5",
@@ -986,7 +995,8 @@ class _LobbyScreenState extends State<LobbyScreen> {
             "K",
             "A",
             "2",
-          ];
+          ];*/
+          List<String> ranks = ["3"];
           List<String> deck = [
             for (var s in suits)
               for (var r in ranks) "$r $s",
@@ -1244,7 +1254,6 @@ class _GameScreenState extends State<GameScreen> {
     //Reload play area
     _loadPlayArea();
 
-
     // Load number of players
     _loadNumberOfPlayers();
   }
@@ -1314,32 +1323,112 @@ class _GameScreenState extends State<GameScreen> {
   }
 
   Future<void> _checkEndOfRoundOrGame() async {
+    // Load game state
+    final gameRow = await supabase
+        .from('games')
+        .select('players_passed, winner, game_name, password, next_game_id')
+        .eq('id', widget.gameId)
+        .single();
 
-    playersPassedThisHand = await supabase.from('games').select('players_passed').eq('id', widget.gameId).single().then((res) => res['players_passed'] ?? 0);
+    final int playersPassed = gameRow['players_passed'] ?? 0;
+    final String winner = gameRow['winner'] ?? '';
+    final String nextGameID = gameRow['next_game_id'] ?? '';
+    // ------------------------------------------------------------
+    // CASE 1: Another player already won
+    // ------------------------------------------------------------
+    if (nextGameID.isNotEmpty && winner != widget.playerName) {
+      print("Another player has won: $winner");
 
-    if (myHand.isEmpty) {
-      // This player has won the game
-      print("${widget.playerName} has won the game!");
-    } else if (playersPassedThisHand >= numberOfPlayers - 1) {
-      // All other players have passed, round over
-      print("${widget.playerName} has won the game!");
+      gameOver();
 
-      Future<String?> nextPlayer = returnNextPlayer(currentTurnPlayer!);
-
-      // Reset for next round, but keep the same turn order
-      await supabase.from('games').update({
-        'start_of_round': true,
-        'players_passed': 0,
-        'current_turn_player_username': await nextPlayer,
-        'in_play_area': [],
-      }).eq('id', widget.gameId);
-
-      await supabase.from('active_players').update({
-        'passed_current_hand': false,
-      }).eq('game_id', widget.gameId);
-
-      print('Round reset');
+      return; // Do NOT create new games
     }
+
+    // ------------------------------------------------------------
+    // CASE 3: End of round logic (not winner)
+    // ------------------------------------------------------------
+    if (playersPassed >= numberOfPlayers - 1) {
+      print("Round ended — resetting.");
+
+      await supabase
+          .from('games')
+          .update({
+            'start_of_round': true,
+            'players_passed': 0,
+            'in_play_area': [],
+          })
+          .eq('id', widget.gameId);
+
+      await supabase
+          .from('active_players')
+          .update({'passed_current_hand': false})
+          .eq('game_id', widget.gameId);
+
+      return;
+    }
+  }
+
+  void gameOver() async {
+    await supabase.rpc(
+      'increment_user_stats',
+      params: {'_username': widget.playerName},
+    );
+
+    final gameRow = await supabase
+        .from('games')
+        .select('winner, game_name, password, next_game_id')
+        .eq('id', widget.gameId)
+        .single();
+
+    final String winnerName = gameRow['winner'] ?? '';
+    final String gameName = gameRow['game_name'] ?? '';
+    final String nextGameID = gameRow['next_game_id'] ?? '';
+
+    if (!mounted) {
+      return;
+    }
+    // Show dialog with winner and option to view stats or return to lobby
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        title: const Text("Game Over"),
+        content: Text("Winner: $winnerName"),
+        actions: [
+          ElevatedButton(
+            onPressed: () {
+              Navigator.pop(context); // close dialog
+              Navigator.popUntil(
+                context,
+                (route) => route.settings.name == JoinGameScreen.routeName,
+              );
+            },
+            child: const Text("Return to Game List"),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.pop(context); // close dialog
+              Navigator.popUntil(
+                context,
+                (route) => route.settings.name == JoinGameScreen.routeName,
+              );
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  settings: const RouteSettings(name: LobbyScreen.routeName),
+                  builder: (context) => LobbyScreen(
+                    gameId: nextGameID,
+                    gameName: gameName,
+                    playerName: widget.playerName,
+                  ),
+                ),
+              );
+            },
+            child: const Text("Next Game"),
+          ),
+        ],
+      ),
+    );
   }
 
   //Message logic
@@ -1453,13 +1542,14 @@ class _GameScreenState extends State<GameScreen> {
     } else {
       data = await supabase
           .from('games')
-          .select('turn_order, current_turn_player_username, start_of_round, players_passed')
+          .select(
+            'turn_order, current_turn_player_username, start_of_round, players_passed',
+          )
           .eq('id', widget.gameId)
           .single();
     }
     startOfRound = data['start_of_round'] ?? false;
     playersPassedThisHand = data['players_passed'] ?? 0;
-
 
     if (!mounted) return;
 
@@ -1477,7 +1567,6 @@ class _GameScreenState extends State<GameScreen> {
 
     if (!mounted) return;
 
-    
     setState(() {
       cardsRemaining = {
         for (var p in data) p['username']: p['cards_remaining'] as int,
@@ -1573,6 +1662,64 @@ class _GameScreenState extends State<GameScreen> {
       }
     });
 
+    await supabase
+        .from('active_players')
+        .update({'cards_remaining': myHand.length})
+        .eq('game_id', widget.gameId)
+        .eq('username', widget.playerName);
+
+    if (myHand.isEmpty) {
+      //Check for this player winning
+      print("THIS DEVICE IS SETTING THE WINNER.");
+      // Load game state
+      final gameRow = await supabase
+          .from('games')
+          .select('password')
+          .eq('id', widget.gameId)
+          .single();
+
+      //gameChannel.unsubscribe(); // stop events for old game
+
+      // STEP 1 — Set winner ONLY IF still empty (prevents duplicates)
+      await supabase
+          .from('games')
+          .update({'winner': widget.playerName})
+          .eq('id', widget.gameId);
+
+      print("Winner successfully recorded!");
+
+      // ------------------------------------------------------------
+      // STEP 3 — Create new game safely
+      // ------------------------------------------------------------
+      await supabase.from('games').insert({
+        'game_name': widget.gameName,
+        'password': gameRow['password'],
+      });
+      String newGameId = '';
+      //select most recently created entry
+      await supabase
+          .from('games')
+          .select('id')
+          .order('created_at', ascending: false)
+          .limit(1)
+          .single()
+          .then((newGame) async {
+            newGameId = newGame['id'];
+          });
+      print("New game created with ID: $newGameId");
+
+      //STEP 4 — Save the next_game_id
+      await supabase
+          .from('games')
+          .update({'next_game_id': newGameId})
+          .eq('id', widget.gameId);
+
+      // STEP 5 — Navigate to new game
+      if (!mounted) return;
+      gameOver();
+      return;
+    }
+
     //Move Turn to next player
     Future<String?> nextPlayer = returnNextPlayer(currentTurnPlayer!);
     //Supabase updates
@@ -1585,12 +1732,6 @@ class _GameScreenState extends State<GameScreen> {
           'start_of_round': startOfRound,
         })
         .eq('id', widget.gameId);
-
-    await supabase
-        .from('active_players')
-        .update({'cards_remaining': myHand.length})
-        .eq('game_id', widget.gameId)
-        .eq('username', widget.playerName);
   }
 
   int cardValueFromString(String card) {
@@ -1741,7 +1882,7 @@ class _GameScreenState extends State<GameScreen> {
     return _isStraight(cards) && _isFlush(cards);
   }
 
-  void _passTurn() async{
+  void _passTurn() async {
     if (currentTurnPlayer != widget.playerName) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text("Invalid action: not your turn!")),
@@ -1760,62 +1901,64 @@ class _GameScreenState extends State<GameScreen> {
     }
     //Supabase updates
     Future<String?> nextPlayer = returnNextPlayer(currentTurnPlayer!);
-    await supabase.from('games').update({
-      'current_turn_player_username': await nextPlayer,
-      'players_passed': playersPassedThisHand + 1,
-    }).eq('id', widget.gameId);
+    await supabase
+        .from('games')
+        .update({
+          'current_turn_player_username': await nextPlayer,
+          'players_passed': playersPassedThisHand + 1,
+        })
+        .eq('id', widget.gameId);
 
-    await supabase.from('active_players').update({
-      'passed_current_hand': true,
-    }).eq('game_id', widget.gameId).eq('username', widget.playerName);
-    // Move turn to next player
-    setState(() {
-    });
+    await supabase
+        .from('active_players')
+        .update({'passed_current_hand': true})
+        .eq('game_id', widget.gameId)
+        .eq('username', widget.playerName);
+
+    setState(() {});
   }
 
-Future<String?> returnNextPlayer(String currentPlayer) async {
-  // Load turn order
-  final gameRow = await supabase
-      .from('games')
-      .select('turn_order')
-      .eq('id', widget.gameId)
-      .single();
+  Future<String?> returnNextPlayer(String currentPlayer) async {
+    // Load turn order
+    final gameRow = await supabase
+        .from('games')
+        .select('turn_order')
+        .eq('id', widget.gameId)
+        .single();
 
-  final List<dynamic> turnOrder = gameRow['turn_order'];
+    final List<dynamic> turnOrder = gameRow['turn_order'];
 
-  // Load player pass states
-  final passRows = await supabase
-      .from('active_players')
-      .select('username, passed_current_hand')
-      .eq('game_id', widget.gameId);  // <-- FIXED HERE
+    // Load player pass states
+    final passRows = await supabase
+        .from('active_players')
+        .select('username, passed_current_hand')
+        .eq('game_id', widget.gameId); // <-- FIXED HERE
 
-  // Build map: username -> has passed
-  final Map<String, bool> passedMap = {};
-  for (final row in passRows) {
-    passedMap[row['username']] = (row['passed_current_hand'] == true);
-  }
-
-  // Find index of current player in turn order
-  final int currentIndex = turnOrder.indexOf(currentPlayer);
-  if (currentIndex == -1) return null;
-
-  // Find the next player who has NOT passed
-  for (int i = 1; i <= turnOrder.length; i++) {
-    final int checkIndex = (currentIndex + i) % turnOrder.length;
-    final String nextCandidate = turnOrder[checkIndex];
-
-    final hasPassed = passedMap[nextCandidate] ?? false;
-
-    if (!hasPassed) {
-      return nextCandidate;
+    // Build map: username -> has passed
+    final Map<String, bool> passedMap = {};
+    for (final row in passRows) {
+      passedMap[row['username']] = (row['passed_current_hand'] == true);
     }
+
+    // Find index of current player in turn order
+    final int currentIndex = turnOrder.indexOf(currentPlayer);
+    if (currentIndex == -1) return null;
+
+    // Find the next player who has NOT passed
+    for (int i = 1; i <= turnOrder.length; i++) {
+      final int checkIndex = (currentIndex + i) % turnOrder.length;
+      final String nextCandidate = turnOrder[checkIndex];
+
+      final hasPassed = passedMap[nextCandidate] ?? false;
+
+      if (!hasPassed) {
+        return nextCandidate;
+      }
+    }
+
+    // All players passed → end of round
+    return null;
   }
-
-  // All players passed → end of round
-  return null;
-}
-
-
 
   //Player's hand
   Widget _buildPlayerHand() {
