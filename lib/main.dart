@@ -1,5 +1,3 @@
-//hey
-
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -981,7 +979,7 @@ class _LobbyScreenState extends State<LobbyScreen> {
           // Generate and assign cards to each player
           // 1️⃣ Full deck
           List<String> suits = ["♦", "♣", "♥", "♠"];
-          /*List<String> ranks = [
+          List<String> ranks = [
             "3",
             "4",
             "5",
@@ -995,8 +993,8 @@ class _LobbyScreenState extends State<LobbyScreen> {
             "K",
             "A",
             "2",
-          ];*/
-          List<String> ranks = ["3"];
+          ];
+          
           List<String> deck = [
             for (var s in suits)
               for (var r in ranks) "$r $s",
@@ -1403,7 +1401,7 @@ class _GameScreenState extends State<GameScreen> {
                 (route) => route.settings.name == JoinGameScreen.routeName,
               );
             },
-            child: const Text("Return to Game List"),
+            child: const Text("Leave"),
           ),
           ElevatedButton(
             onPressed: () {
@@ -2228,6 +2226,7 @@ class _GameScreenState extends State<GameScreen> {
 }
 
 class CardWidget extends StatelessWidget {
+
   final PlayingCard card;
   final VoidCallback onTap;
 
